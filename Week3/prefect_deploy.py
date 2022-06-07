@@ -1,8 +1,8 @@
 import pandas as pd
 import pickle
+import os
 
 from sklearn.feature_extraction import DictVectorizer
-from sklearn.linear_model import LinearRegression, Lasso, Ridge
 from sklearn.metrics import mean_squared_error
 
 import xgboost as xgb
@@ -11,9 +11,12 @@ from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
 from hyperopt.pyll import scope
 
 import mlflow
+from mlflow.entities import ViewType
+from mlflow.tracking import MlflowClient
 
 from prefect import flow, task
 from prefect.task_runners import SequentialTaskRunner
+
 
 @task
 def read_dataframe(filename):
@@ -34,6 +37,7 @@ def read_dataframe(filename):
 
 @task
 def add_features(df_train, df_val):
+
     # df_train = read_dataframe(train_path)
     # df_val = read_dataframe(val_path)
 
@@ -102,18 +106,27 @@ def train_model_search(train, valid, y_val):
 def train_best_model(train, valid, y_val, dv):
     with mlflow.start_run():
 
-        best_params = {
-            'learning_rate': 0.09585355369315604,
-            'max_depth': 30,
-            'min_child_weight': 1.060597050922164,
-            'objective': 'reg:linear',
-            'reg_alpha': 0.018060244040060163,
-            'reg_lambda': 0.011658731377413597,
-            'seed': 42
-        }
+        ### Select the run with the lowest rmse
+        client = MlflowClient()
+        experiment = client.get_experiment_by_name('nyc-taxi-experiment')
+        runs = client.search_runs(
+            experiment_ids=experiment.experiment_id,
+            run_view_type=ViewType.ACTIVE_ONLY,
+            max_results=1,
+            order_by=["metrics.rmse ASC"]
+            )
+
+        best_params = runs[0].data.params
+        # Change params type to enter in the model
+        for key in best_params:
+            if key == 'seed' or key == 'max_depth':
+                best_params[key] = int(best_params[key])
+            
+            elif key != 'objective':
+                best_params[key] = float(best_params[key])
+        ###
 
         mlflow.log_params(best_params)
-
         booster = xgb.train(
             params=best_params,
             dtrain=train,
@@ -129,31 +142,48 @@ def train_best_model(train, valid, y_val, dv):
         with open("models/preprocessor.b", "wb") as f_out:
             pickle.dump(dv, f_out)
         mlflow.log_artifact("models/preprocessor.b", artifact_path="preprocessor")
-
         mlflow.xgboost.log_model(booster, artifact_path="models_mlflow")
 
 @flow(task_runner=SequentialTaskRunner())
-def main(train_path: str="./data/green_tripdata_2021-01.parquet",
-        val_path: str="./data/green_tripdata_2021-02.parquet"):
-    mlflow.set_tracking_uri("sqlite:///mlflow.db")
+def main(train_path: str="./data/green_tripdata_2021-01.parquet", val_path: str="./data/green_tripdata_2021-02.parquet"):
+
+    # Set MLflow environment variables
+    mlflow.set_tracking_uri("sqlite:///backend.db")
     mlflow.set_experiment("nyc-taxi-experiment")
-    X_train = read_dataframe(train_path)
-    X_val = read_dataframe(val_path)
-    X_train, X_val, y_train, y_val, dv = add_features(X_train, X_val).result()
+    
+    # Requirements
+    folder = 'models'
+    if not os.path.exists(folder):
+        print(f'{folder} created')
+        os.mkdir(folder)
+
+
+    # Read first the data to see the flow in Prefect
+    df_train = read_dataframe(train_path)
+    df_val = read_dataframe(val_path)
+
+    # Create Features - By adding a @task to a function we need to get the result for the function to work
+    X_train, X_val, y_train, y_val, dv = add_features(df_train=df_train, df_val=df_val).result()
+    
     train = xgb.DMatrix(X_train, label=y_train)
     valid = xgb.DMatrix(X_val, label=y_val)
+
+    # Hyperparameter optimization - using hyperopt
     train_model_search(train, valid, y_val)
+    
+    # The hyperparameters are defined - try to use MLClient
     train_best_model(train, valid, y_val, dv)
 
+# Setting deployment specifications
 from prefect.deployments import DeploymentSpec
 from prefect.orion.schemas.schedules import IntervalSchedule
-from prefect.flow_runners import SubprocessFlowRunner
+from prefect.flow_runners import SubprocessFlowRunner # With this we will run it without a container
 from datetime import timedelta
 
 DeploymentSpec(
     flow=main,
-    name="model_training",
+    name='model_training',
     schedule=IntervalSchedule(interval=timedelta(minutes=5)),
     flow_runner=SubprocessFlowRunner(),
-    tags=["ml"]
+    tags=['ml'],
 )
