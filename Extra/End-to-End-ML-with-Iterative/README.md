@@ -30,3 +30,4 @@ Follow this tutorial to try to use DVC [repo](https://github.com/iterative/magne
 - GitFlow for ML
 - Auto reporting for PRs/MRs
 - Integration with Cloud Services
+    
