@@ -1,5 +1,7 @@
+import json
 import requests
-import lambda_function
+
+from deepdiff import DeepDiff
 
 event = {
     "Records": [
@@ -23,5 +25,19 @@ event = {
 }
 
 url = 'http://localhost:8080/2015-03-31/functions/function/invocations' # in the README.md file
-response = requests.post(url, json=event)
-print(response.json())
+actual_response = requests.post(url, json=event).json()
+expected_response = {
+    'predictions': [{
+        'model': 'ride_duration_prediction_model', 
+        'version': 'b24cae9f5daa423f80f4e0bd4435e72d', 
+        'prediction': {
+            'ride_duration': 18.2, 
+            'ride_id': 156
+            }
+            }]}
+
+print(f"actual response: {json.dumps(actual_response, indent=2)}")
+
+diff = DeepDiff(actual_response, expected_response)
+print("diff: {diff}")
+assert "values_changed" not in diff
