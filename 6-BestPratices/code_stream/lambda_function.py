@@ -9,8 +9,8 @@ kinesis_client = boto3.client('kinesis')
 PREDICTIONS_STREAM_NAME = os.getenv('PREDICTIONS_STREAM_NAME', 'ride-predictions')
 
 # Load the model from s3 bucket
-RUN_ID = os.getenv('RUN_ID', 'b24cae9f5daa423f80f4e0bd4435e72d')
-logged_model = f"s3://mlflow-artifacts-rmt1/0/{RUN_ID}/artifacts/model"
+RUN_ID = os.getenv('RUN_ID', '8b4afe073de2423cad4b858170ac574f')
+logged_model = f"s3://mlflow-artifacts-rmt/0/{RUN_ID}/artifacts/model"
 
 model = mlflow.pyfunc.load_model(logged_model)
 
@@ -41,6 +41,7 @@ def lambda_handler(event, context):
     
         ride = ride_event['ride']
         ride_id = ride_event['ride_id']
+
         features = prepare_features(ride)
         prediction = predict(features)
         
